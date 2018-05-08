@@ -56,8 +56,8 @@ df_val_image = pd.merge(df_val_image, df_val_annotation, on='image_id', how='lef
 
 
 # extract the relevant information based on the number of visible human key-points
-keypoints_thredhold = 15
-df_train_raw = df_train_image[(df_train_image['num_keypoints']>keypoints_thredhold)][['file_name','height','image_id','width','bbox','keypoints',\
+keypoints_thredhold = 5
+df_train_raw = df_train_image[(df_train_image['num_keypoints']>keypoints_thredhold)& (df_train_image['height']<df_train_image['width'])][['file_name','height','image_id','width','bbox','keypoints',\
                                                                       'num_keypoints','segmentation']].reset_index(drop=True)
 df_val = df_val_image[df_val_image['num_keypoints']>keypoints_thredhold][['file_name','height','image_id','width','bbox','keypoints',\
                                                                       'num_keypoints','segmentation']].reset_index(drop=True)
@@ -117,6 +117,57 @@ def Gaussian2d(x, y, x0, y0, a, sigma=10):
     return a * math.exp(- xx - yy)
 
 
+def generator_multiple(batch_size):
+    # create heat maps for all people in a single image
+    pic_list = df_train['file_name'].unique()
+    n_pic = len(pic_list)
+    # Create empty arrays to contain batch of features and labels
+    batch_labels =[]
+    batch_label = np.zeros((batch_size, 27, 37, 17))
+    while True:
+        batch_features = np.zeros((batch_size, 220, 300, 3))
+        batch_labels =[]
+        batch_label = np.zeros((batch_size, 27, 37, 17))
+        for i in range(batch_size):
+            # choose random index in features
+            index= random.randint(0,n_pic)
+            img = cv2.imread('./dataset/train2017/'+pic_list[index])
+            # create one layer for each of labeled part
+            keypoints = list(df_train[df_train['file_name']==pic_list[index]]['keypoints'].values)
+            heat_map = create_labels_multiple(img, keypoints)
+            process_img = img_processing(img)
+            batch_features[i] = process_img
+            batch_label[i] = heat_map
+        for i in range (6):
+            batch_labels.append(batch_label)
+        yield batch_features, batch_labels
+
+
+def create_labels_multiple(img, points):
+    # assume the raw images will be resized in to (220, 300)
+    # the heat_map will be in the size of (27,37)
+    w, h = img.shape[0], img.shape[1]
+    heat_map_raw = np.zeros((w, h, 17))
+    radius = 50
+    for i in range (17):
+        for j in range(len(points)):
+            if points[j][i*3+2] == 2:
+                x0,y0 = points[j][i*3+1], points[j][i*3]
+                for x in range (x0-radius, x0+radius):
+                    for y in range (y0-radius, y0+radius ):
+                        if x in range (0,w) and y in range (0,h):
+                            heat_map_raw[x, y, i] = Gaussian2d(x,y, x0,y0, 1, 10)
+    heat_map = cv2.resize(heat_map_raw, (37,27),interpolation=cv2.INTER_CUBIC)
+    return heat_map
+
+
+def rotateImage(image, angle):
+  image_center = tuple(np.array(image.shape[1::-1]) / 2)
+  rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+  result = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
+  return result
+
+
 def generator(batch_size):
     n_record = len(df_train)
     # Create empty arrays to contain batch of features and labels
@@ -141,14 +192,14 @@ def generator(batch_size):
             batch_labels.append(batch_label)
         yield batch_features, batch_labels
 
-        
+
 def img_processing(img):
     # data processing and data augumentation
     # TODO, data augmentation
     img = img/255. - 0.5
     img = cv2.resize(img,(300, 220),interpolation=cv2.INTER_CUBIC)
     return img
-    
+
 
 def create_labels(img, points):
     # assume the raw images will be resized in to (220, 300)
@@ -168,7 +219,7 @@ def create_labels(img, points):
     return heat_map
 
 
-def relu(x): 
+def relu(x):
     return Activation('relu')(x)
 
 def conv(x, nf, ks, name, weight_decay):
@@ -237,13 +288,13 @@ def stage1_block(x, num_p, branch, weight_decay):
     x = relu(x)
     x = conv(x, 512, 1, "Mconv4_stage1_L%d" % branch, (weight_decay, 0))
     x = relu(x)
-    x = conv(x, num_p, 1, "Mconv5_stage1_L%d" % branch, (weight_decay, 0))
+    x = conv(x, num_p, 1, "modified_Mconv5_stage1_L%d" % branch, (weight_decay, 0))
     return x
 
 
 def stageT_block(x, num_p, stage, branch, weight_decay):
 
-    x = conv(x, 128, 7, "Mconv1_stage%d_L%d" % (stage, branch), (weight_decay, 0))
+    x = conv(x, 128, 7, "modified_Mconv1_stage%d_L%d" % (stage, branch), (weight_decay, 0))
     x = relu(x)
     x = conv(x, 128, 7, "Mconv2_stage%d_L%d" % (stage, branch), (weight_decay, 0))
     x = relu(x)
@@ -255,7 +306,7 @@ def stageT_block(x, num_p, stage, branch, weight_decay):
     x = relu(x)
     x = conv(x, 128, 1, "Mconv6_stage%d_L%d" % (stage, branch), (weight_decay, 0))
     x = relu(x)
-    x = conv(x, num_p, 1, "Mconv7_stage%d_L%d" % (stage, branch), (weight_decay, 0))
+    x = conv(x, num_p, 1, "modified_Mconv7_stage%d_L%d" % (stage, branch), (weight_decay, 0))
     return x
 
 
@@ -342,24 +393,13 @@ def get_lrmult(model):
     return lr_mult
 
 
-batch_size = 32
+batch_size = 16
 base_lr = 2e-4
 momentum = 0.9
 weight_decay = 5e-4
 lr_policy = "step"
 gamma = 0.333
-stepsize = 10000
-max_iter = 100
-
-file_name = 'V1'
-date = '05082018'
-file_id = file_name + "_" + date
-
-WEIGHT_DIR = "./" + file_id
-WEIGHTS_SAVE = 'weights_V1.h5'
-
-TRAINING_LOG = "./" + file_id + ".csv"
-LOGS_DIR = "./logs"
+max_iter = 50
 
 model = get_training_model(weight_decay,np_branch2=17)
 lr_mult = get_lrmult(model)
@@ -391,34 +431,27 @@ for layer in model.layers:
 
 last_epoch = 0
 
+import h5py
+# transfer learning: reruse the weights of Stage 1
+weights_path = 'model.h5'
+f = h5py.File(weights_path)
+model.load_weights('model.h5', by_name=True)
+
+
 # euclidean loss as implemented in caffe https://github.com/BVLC/caffe/blob/master/src/caffe/layers/euclidean_loss_layer.cpp
 def eucl_loss(x, y):
     l = K.sum(K.square(x - y)) / batch_size / 2
     return l
 
-# learning rate schedule - equivalent of caffe lr_policy =  "step"
 iterations_per_epoch = len(df_train) // batch_size
 
 def step_decay(epoch):
-    steps = epoch * iterations_per_epoch * batch_size
-    lrate = base_lr * math.pow(gamma, math.floor(steps/stepsize))
+    lrate = base_lr * math.pow(gamma, math.floor(epoch/20))
     print("Epoch:", epoch, "Learning rate:", lrate)
     return lrate
 
 print("Weight decay policy...")
-for i in range(1,100,5): step_decay(i)
-
-
-
-# configure callbacks
-lrate = LearningRateScheduler(step_decay)
-checkpoint = ModelCheckpoint(WEIGHT_DIR + '/' + WEIGHTS_SAVE, monitor='loss', verbose=0, save_best_only=False, save_weights_only=True, mode='min', period=1)
-csv_logger = CSVLogger(TRAINING_LOG, append=True)
-tb = TensorBoard(log_dir=LOGS_DIR, histogram_freq=0, write_graph=True, write_images=False)
-tnan = TerminateOnNaN()
-#coco_eval = CocoEval(train_client, val_client)
-
-callbacks_list = [lrate, checkpoint, csv_logger, tb, tnan]
+for i in range(1,100,20): step_decay(i)
 
 
 class MultiSGD(Optimizer):
@@ -495,8 +528,8 @@ class MultiSGD(Optimizer):
 multisgd = MultiSGD(lr=base_lr, momentum=momentum, decay=0.0, nesterov=False, lr_mult=lr_mult)
 # start training
 model.compile(loss=eucl_loss, optimizer=multisgd)
-csv_logger = CSVLogger('model_v2_training.log')
-model.fit_generator(generator(batch_size), steps_per_epoch = 2, epochs=10, callbacks=[csv_logger])
+csv_logger = CSVLogger('model_v5_training.log')
+model.fit_generator(generator_multiple(batch_size), steps_per_epoch = 10, epochs=max_iter, callbacks=[csv_logger])
 
-model.save('my_model_V2.h5')  # creates a HDF5 file 'my_model.h5'
+model.save('my_model_V5.h5')  # creates a HDF5 file 'my_model.h5'
 print ('model saving done')

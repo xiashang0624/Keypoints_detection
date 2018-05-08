@@ -5,10 +5,10 @@ from pandas.io.json import json_normalize
 import pandas as pd
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
+#import matplotlib.pyplot as plt
+#import matplotlib.image as mpimg
 import os, sys, glob
-import matplotlib
+#import matplotlib
 import math
 import random
 from keras.optimizers import Optimizer
@@ -56,7 +56,7 @@ df_val_image = pd.merge(df_val_image, df_val_annotation, on='image_id', how='lef
 
 
 # extract the relevant information based on the number of visible human key-points
-keypoints_thredhold = 16
+keypoints_thredhold = 15
 df_train_raw = df_train_image[(df_train_image['num_keypoints']>keypoints_thredhold)][['file_name','height','image_id','width','bbox','keypoints',\
                                                                       'num_keypoints','segmentation']].reset_index(drop=True)
 df_val = df_val_image[df_val_image['num_keypoints']>keypoints_thredhold][['file_name','height','image_id','width','bbox','keypoints',\
@@ -109,7 +109,7 @@ for i in df_train['file_name']:
 colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], \
           [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], \
           [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]]
-cmap = matplotlib.cm.get_cmap('hsv')
+#cmap = matplotlib.cm.get_cmap('hsv')
 
 def Gaussian2d(x, y, x0, y0, a, sigma=10):
     xx = (float(x) - x0)** 2 / 2 / sigma **2
@@ -121,8 +121,9 @@ def generator(batch_size):
     n_record = len(df_train)
     # Create empty arrays to contain batch of features and labels
     batch_features = np.zeros((batch_size, 220, 300, 3))
-    batch_labels = np.zeros((batch_size, 27, 37, 17))
+    batch_label = np.zeros((batch_size, 27, 37, 17))
     while True:
+        batch_labels = []
         for i in range(batch_size):
             # choose random index in features
             index= random.randint(0,n_record)
@@ -132,10 +133,12 @@ def generator(batch_size):
             heat_map = create_labels(img, df_train['keypoints'][index])
             process_img = img_processing(img)
             batch_features[i] = process_img
-            batch_labels[i] = heat_map
+            batch_label[i] = heat_map
         print ("batch feed step done")
         print (batch_features[0].shape)
-        print (batch_labels[0].shape)
+        print (batch_label[0].shape)
+        for i in range(6):
+            batch_labels.append(batch_label)
         yield batch_features, batch_labels
 
         
@@ -235,7 +238,6 @@ def stage1_block(x, num_p, branch, weight_decay):
     x = conv(x, 512, 1, "Mconv4_stage1_L%d" % branch, (weight_decay, 0))
     x = relu(x)
     x = conv(x, num_p, 1, "Mconv5_stage1_L%d" % branch, (weight_decay, 0))
-
     return x
 
 
@@ -254,23 +256,7 @@ def stageT_block(x, num_p, stage, branch, weight_decay):
     x = conv(x, 128, 1, "Mconv6_stage%d_L%d" % (stage, branch), (weight_decay, 0))
     x = relu(x)
     x = conv(x, num_p, 1, "Mconv7_stage%d_L%d" % (stage, branch), (weight_decay, 0))
-
     return x
-
-def apply_mask(x, mask1, mask2, num_p, stage, branch, np_branch1, np_branch2):
-    w_name = "weight_stage%d_L%d" % (stage, branch)
-
-    # TODO: we have branch number here why we made so strange check
-    assert np_branch1 != np_branch2 # we selecting branches by number of pafs, if they accidentally became the same it will be disaster
-
-    if num_p == np_branch1:
-        w = Multiply(name=w_name)([x, mask1])  # vec_weight
-    elif num_p == np_branch2:
-        w = Multiply(name=w_name)([x, mask2])  # vec_heat
-    else:
-        assert False, "wrong number of layers num_p=%d " % num_p
-    return w
-
 
 
 def get_training_model(weight_decay, np_branch2, stages = 6, gpus = None):
@@ -305,20 +291,19 @@ def get_training_model(weight_decay, np_branch2, stages = 6, gpus = None):
 
     x = Concatenate()(new_x)
 
-#     # stage sn >= 2, repeating stage
-#     for sn in range(2, stages + 1):
+    # stage sn >= 2, repeating stage
+    for sn in range(2, stages + 1):
+         new_x = []
+         # stage T
+         stageT_branch2_out = stageT_block(x, np_branch2, sn, 2, weight_decay)
+         w = Multiply()([stageT_branch2_out, heat_weight_input])
+         #w2 = apply_mask(stageT_branch2_out, vec_weight_input, heat_weight_input, np_branch2, sn, 2, np_branch1, np_branch2)
+         outputs.append(stageT_branch2_out)
+         new_x.append(stageT_branch2_out)
+         new_x.append(stage0_out)
 
-#         new_x = []
-#         # stage T
-#         stageT_branch2_out = stageT_block(x, np_branch2, sn, 2, weight_decay)
-#         w = Multiply()([stageT_branch2_out, heat_weight_input])
-#         #w2 = apply_mask(stageT_branch2_out, vec_weight_input, heat_weight_input, np_branch2, sn, 2, np_branch1, np_branch2)
-#         outputs.append(stageT_branch2_out)
-#         new_x.append(stageT_branch2_out)
-#         new_x.append(stage0_out)
-
-#         if sn < stages:
-#             x = Concatenate()(new_x)
+         if sn < stages:
+             x = Concatenate()(new_x)
 
     model = Model(inputs=inputs, outputs=outputs)
     return model
@@ -357,13 +342,13 @@ def get_lrmult(model):
     return lr_mult
 
 
-batch_size = 10
+batch_size = 32
 base_lr = 2e-5
 momentum = 0.9
 weight_decay = 5e-4
 lr_policy = "step"
 gamma = 0.333
-stepsize = 121746 * 17  # in original code each epoch is 121746 and step change is on 17th epoch
+stepsize = 10000* 17  # in original code each epoch is 121746 and step change is on 17th epoch
 max_iter = 200
 
 file_name = 'prelim_training'
@@ -517,6 +502,7 @@ model.save('my_model.h5')  # creates a HDF5 file 'my_model.h5'
 model.fit_generator(generator(batch_size), steps_per_epoch = 100, epochs=max_iter, callbacks=callbacks_list)
 
 model.load_weights('my_model_weights.h5')
+print ('model saving done')
 
 
 

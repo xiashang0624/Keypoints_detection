@@ -342,21 +342,21 @@ def get_lrmult(model):
     return lr_mult
 
 
-batch_size = 32
-base_lr = 2e-5
+batch_size = 16
+base_lr = 2e-4
 momentum = 0.9
 weight_decay = 5e-4
 lr_policy = "step"
 gamma = 0.333
-stepsize = 10000* 17  # in original code each epoch is 121746 and step change is on 17th epoch
+stepsize = 10000 * 17  # in original code each epoch is 121746 and step change is on 17th epoch
 max_iter = 200
 
-file_name = 'prelim_training'
-date = '05072018'
+file_name = 'V1'
+date = '05082018'
 file_id = file_name + "_" + date
 
 WEIGHT_DIR = "./" + file_id
-WEIGHTS_SAVE = 'weights.{epoch:04d}.h5'
+WEIGHTS_SAVE = 'weights_V1.h5'
 
 TRAINING_LOG = "./" + file_id + ".csv"
 LOGS_DIR = "./logs"
@@ -389,8 +389,6 @@ for layer in model.layers:
         layer.set_weights(vgg_model.get_layer(vgg_layer_name).get_weights())
         print("Loaded VGG19 layer: " + vgg_layer_name)
 
-
-
 last_epoch = 0
 
 # euclidean loss as implemented in caffe https://github.com/BVLC/caffe/blob/master/src/caffe/layers/euclidean_loss_layer.cpp
@@ -422,6 +420,8 @@ tnan = TerminateOnNaN()
 
 callbacks_list = [lrate, checkpoint, csv_logger, tb, tnan]
 
+csv_logger = CSVLogger('training.log')
+model.fit(X_train, Y_train, callbacks=[csv_logger])
 
 class MultiSGD(Optimizer):
     """
@@ -497,11 +497,11 @@ class MultiSGD(Optimizer):
 multisgd = MultiSGD(lr=base_lr, momentum=momentum, decay=0.0, nesterov=False, lr_mult=lr_mult)
 # start training
 model.compile(loss=eucl_loss, optimizer=multisgd)
-model.save('my_model.h5')  # creates a HDF5 file 'my_model.h5'
+model.save('my_model_V1.h5')  # creates a HDF5 file 'my_model.h5'
 
 model.fit_generator(generator(batch_size), steps_per_epoch = 100, epochs=max_iter, callbacks=callbacks_list)
 
-model.load_weights('my_model_weights.h5')
+model.load_weights('model_weights_V1.h5')
 print ('model saving done')
 
 

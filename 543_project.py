@@ -342,14 +342,14 @@ def get_lrmult(model):
     return lr_mult
 
 
-batch_size = 16
+batch_size = 32
 base_lr = 2e-4
 momentum = 0.9
 weight_decay = 5e-4
 lr_policy = "step"
 gamma = 0.333
-stepsize = 10000 * 17  # in original code each epoch is 121746 and step change is on 17th epoch
-max_iter = 200
+stepsize = 10000
+max_iter = 100
 
 file_name = 'V1'
 date = '05082018'
@@ -420,8 +420,6 @@ tnan = TerminateOnNaN()
 
 callbacks_list = [lrate, checkpoint, csv_logger, tb, tnan]
 
-csv_logger = CSVLogger('training.log')
-model.fit(X_train, Y_train, callbacks=[csv_logger])
 
 class MultiSGD(Optimizer):
     """
@@ -497,15 +495,8 @@ class MultiSGD(Optimizer):
 multisgd = MultiSGD(lr=base_lr, momentum=momentum, decay=0.0, nesterov=False, lr_mult=lr_mult)
 # start training
 model.compile(loss=eucl_loss, optimizer=multisgd)
-model.save('my_model_V1.h5')  # creates a HDF5 file 'my_model.h5'
+csv_logger = CSVLogger('model_v2_training.log')
+model.fit_generator(generator(batch_size), steps_per_epoch = 2, epochs=10, callbacks=[csv_logger])
 
-model.fit_generator(generator(batch_size), steps_per_epoch = 100, epochs=max_iter, callbacks=callbacks_list)
-
-model.load_weights('model_weights_V1.h5')
+model.save('my_model_V2.h5')  # creates a HDF5 file 'my_model.h5'
 print ('model saving done')
-
-
-
-
-
-
